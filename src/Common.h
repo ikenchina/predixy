@@ -10,7 +10,7 @@
 #include <limits.h>
 
 #define _PREDIXY_NAME_      "predixy"
-#define _PREDIXY_VERSION_   "1.0.5"
+#define _PREDIXY_VERSION_   "v1.0.6"
 
 namespace Const
 {
