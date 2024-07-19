@@ -906,7 +906,7 @@ void Handler::handleResponse(ConnectConnection* s, Request* req, Response* res)
     default:
         break;
     }
-    if (s && !s->isShared()) {
+    if (s && !s->isShared() && res->code() != Response::ServerConnectionClose) {
         if (!c->inTransaction() && !c->inSub(true)) {
             mConnPool[s->server()->id()]->putPrivateConnection(s);
             c->detachConnectConnection();

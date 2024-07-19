@@ -91,9 +91,12 @@ public:
         P obj = mHead;
         if (obj) {
             Node* n = node((T*)obj);
-            mHead = n->next(Idx); 
-            if (--mSize == 0) {
-                mTail = nullptr;
+            if (mHead == mTail) {
+                mHead = mTail = nullptr;
+                mSize = 0;
+            } else {
+                mHead = n->next(Idx); 
+                --mSize;
             }
             n->reset(Idx);
         }

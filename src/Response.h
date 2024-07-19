@@ -128,6 +128,9 @@ public:
     {
         return mRes;
     }
+    GenericCode code() const {
+        return mCode;
+    }
 private:
     bool getAddr(int& slot, SString<Const::MaxAddrLen>& addr, const char* token) const;
 private:
@@ -135,6 +138,7 @@ private:
     int64_t mInteger;
     Segment mHead; //for mget
     Segment mRes;
+    GenericCode mCode;
 };
 
 typedef List<Response> ResponseList;

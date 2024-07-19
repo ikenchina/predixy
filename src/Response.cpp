@@ -59,7 +59,8 @@ Response::Response():
 
 Response::Response(GenericCode code):
     mType(Reply::None),
-    mInteger(0)
+    mInteger(0),
+    mCode(code)
 {
     auto r = GenericResponses[code];
     mType = r->mType;
