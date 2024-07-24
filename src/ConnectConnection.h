@@ -79,6 +79,7 @@ public:
         return !mSentRequests.empty() ? mSentRequests.front() :
               (!mSendRequests.empty() ? mSendRequests.front() : nullptr);
     }
+    ServerPool* pool() const;
 private:
     void parse(Handler* h, Buffer* buf, int pos);
     void handleResponse(Handler* h);

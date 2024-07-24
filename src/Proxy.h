@@ -45,10 +45,10 @@ public:
     {
         return mDataCenter;
     }
-    ServerPool* serverPool() const
-    {
-        return mServPool;
+    const std::vector<std::shared_ptr<ServerPool>>& serverPools() const {
+        return mServPools;
     }
+    ServerPool* serverPool(Request* req, const String& key) const;
     bool isSplitMultiKey() const
     {
         return mConf->standaloneServerPool().groups.size() != 1;
@@ -57,11 +57,11 @@ public:
     {
         return mConf->standaloneServerPool().groups.size() == 1;
     }
-    bool supportSubscribe() const
-    {
-        return mConf->standaloneServerPool().groups.size() == 1 ||
-               mConf->clusterServerPool().servers.size() > 0;
-    }
+    // bool supportSubscribe() const
+    // {
+    //     return mConf->standaloneServerPool().groups.size() == 1 ||
+    //            mConf->clusterServerPool().servers.size() > 0;
+    // }
     const std::vector<Handler*>& handlers() const
     {
         return mHandlers;
@@ -79,12 +79,21 @@ public:
         return mLatencyMonitorSet;
     }
 private:
+    class RouteCluster {
+    public:
+        String prefixKey;
+        std::shared_ptr<ServerPool> cluster;
+        std::shared_ptr<ServerPool> read_cluster;
+    };
+private:
     Conf* mConf;
     ListenSocket* mListener;
     Authority mAuthority;
     DataCenter* mDataCenter;
     std::vector<Handler*> mHandlers;
-    ServerPool* mServPool;
+    //ServerPool* mServPool;
+    std::vector<std::shared_ptr<ServerPool>> mServPools;
+    std::vector<RouteCluster> mRouteClusters;
     time_t mStartTime;
     AtomicLong mStatsVer;
     LatencyMonitorSet mLatencyMonitorSet;

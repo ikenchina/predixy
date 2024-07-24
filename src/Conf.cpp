@@ -127,6 +127,7 @@ void Conf::setGlobal(const ConfParser::Node* node)
     const ConfParser::Node* clusterServerPool = nullptr;
     const ConfParser::Node* standaloneServerPool = nullptr;
     const ConfParser::Node* dataCenter = nullptr;
+    const ConfParser::Node* routePolicy = nullptr;
     std::vector<const ConfParser::Node*> latencyMonitors;
     for (auto p = node; p; p = p->next) {
         if (setStr(mName, "Name", p)) {
@@ -169,6 +170,8 @@ void Conf::setGlobal(const ConfParser::Node* node)
             dataCenter = p;
         } else if (strcasecmp(p->key.c_str(), "CustomCommand") == 0) {
             setCustomCommand(p);
+        } else if (strcasecmp(p->key.c_str(), "RoutePolicy") == 0) {
+            routePolicy = p;
         } else {
             Throw(UnknownKey, "%s:%d unknown key %s", p->file, p->line, p->key.c_str());
         }
@@ -179,7 +182,7 @@ void Conf::setGlobal(const ConfParser::Node* node)
     if (clusterServerPool && standaloneServerPool) {
         Throw(LogicError, "Can't define ClusterServerPool/StandaloneServerPool at the same time");
     } else if (clusterServerPool) {
-        setClusterServerPool(clusterServerPool);
+        setClusterServerPools(clusterServerPool);
         mServerPoolType = ServerPool::Cluster;
     } else if (standaloneServerPool) {
         if (strcasecmp(standaloneServerPool->key.c_str(), "SentinelServerPool") == 0) {
@@ -196,6 +199,9 @@ void Conf::setGlobal(const ConfParser::Node* node)
     for (auto& latencyMonitor : latencyMonitors) {
         mLatencyMonitors.push_back(LatencyMonitorConf{});
         setLatencyMonitor(mLatencyMonitors.back(), latencyMonitor);
+    }
+    if (routePolicy) {
+        setRoutePolicy(routePolicy);
     }
 }
 
@@ -275,23 +281,41 @@ bool Conf::setServerPool(ServerPoolConf& sp, const ConfParser::Node* p)
     return ret;
 }
 
-void Conf::setClusterServerPool(const ConfParser::Node* node)
+
+void Conf::setClusterServerPools(const ConfParser::Node* node)
 {
     if (!node->sub) {
         Throw(InvalidValue, "%s:%d ClusterServerPool require scope value", node->file, node->line);
     }
     for (auto p = node->sub; p; p = p->next) {
-        if (setServerPool(mClusterServerPool, p)) {
-        } else if (setServers(mClusterServerPool.servers, "Servers", p)) {
+        if (strcasecmp(p->key.c_str(), "Cluster") != 0) {
+            Throw(InvalidValue, "%s:%d ClusterServerPool allow only Cluster element", p->file, p->line);
+        }
+
+        mClusterPools.push_back(ClusterServerPoolConf{});
+        auto& cc = mClusterPools.back();
+        cc.name = p->val;
+        setClusterServerPool(cc, p);
+    }
+}
+
+void Conf::setClusterServerPool(ClusterServerPoolConf &cluster, const ConfParser::Node* node)
+{
+    if (!node->sub) {
+        Throw(InvalidValue, "%s:%d ClusterServerPool require scope value", node->file, node->line);
+    }
+    for (auto p = node->sub; p; p = p->next) {
+        if (setServerPool(cluster, p)) {
+        } else if (setServers(cluster.servers, "Servers", p)) {
         } else {
             Throw(UnknownKey, "%s:%d unknown key %s",
                     p->file, p->line, p->key.c_str());
         }
     }
-    if (mClusterServerPool.databases != 1) {
+    if (cluster.databases != 1) {
         Throw(InvalidValue, "ClusterServerPool Databases must be 1");
     }
-    if (mClusterServerPool.servers.empty()) {
+    if (cluster.servers.empty()) {
         Throw(LogicError, "ClusterServerPool no server");
     }
 }
@@ -388,6 +412,38 @@ void Conf::setDataCenter(const ConfParser::Node* node)
         setDC(dc, p);
     }
 }
+
+void Conf::setRoutePolicy(const ConfParser::Node* node) {
+    if (!node->sub) {
+        Throw(InvalidValue, "%s:%d RoutePolicy require scope value", node->file, node->line);
+    }
+    for (auto p = node->sub; p; p = p->next) {
+        if (strcasecmp(p->key.c_str(), "Route") != 0) {
+            Throw(InvalidValue, "%s:%d Route allow only Route element", p->file, p->line);
+        }
+        if (!p->sub) {
+            Throw(InvalidValue, "%s:%d Route require scope value", node->file, node->line);
+        }
+        mRoutes.routes.push_back(RoutePolicy{});
+        auto& route = mRoutes.routes.back();
+        for (auto pp = p->sub; pp; pp = pp->next) {
+            if (strcasecmp(pp->key.c_str(), "PrefixKey") == 0) {
+                route.prefixKey = pp->val;
+            } else if (strcasecmp(pp->key.c_str(), "Cluster") == 0) {
+                route.cluster = pp->val;
+            } else if (strcasecmp(pp->key.c_str(), "ReadCommandPolicy") == 0) {
+                if (!pp->sub) {
+                    Throw(InvalidValue, "%s:%d ReadCommandPolicy require scope value", node->file, node->line);
+                }
+                auto rcp = pp->sub;
+                if (strcasecmp(rcp->key.c_str(), "Cluster") == 0) {
+                    route.read.cluster = rcp->val;
+                }
+            }
+        }   
+    }
+}
+
 
 void Conf::setCustomCommand(const ConfParser::Node* node)
 {

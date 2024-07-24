@@ -62,7 +62,8 @@ Request::Request():
     mFollowersDone(0),
     mRedirectCnt(0),
     mCreateTime(Util::elapsedUSec()),
-    mData(nullptr)
+    mData(nullptr),
+    mServerPool(nullptr)
 {
 }
 
@@ -76,7 +77,8 @@ Request::Request(AcceptConnection* c):
     mFollowersDone(0),
     mRedirectCnt(0),
     mCreateTime(Util::elapsedUSec()),
-    mData(nullptr)
+    mData(nullptr),
+    mServerPool(nullptr)
 {
 }
 
@@ -89,7 +91,8 @@ Request::Request(GenericCode code):
     mFollowersDone(0),
     mRedirectCnt(0),
     mCreateTime(Util::elapsedUSec()),
-    mData(nullptr)
+    mData(nullptr),
+    mServerPool(nullptr)
 {
     auto r = GenericRequests[code];
     mType = r->mType;
