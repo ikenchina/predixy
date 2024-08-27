@@ -61,6 +61,7 @@ struct ServerPoolConf
 
 struct ClusterServerPoolConf : public ServerPoolConf
 {
+    std::string name;
     std::vector<ServerConf> servers;
 };
 
@@ -105,6 +106,22 @@ struct CustomCommandConf
 
     static void init(CustomCommandConf &c, const char* name);
 };
+
+struct ReadCommandPolicy {
+    std::string cluster;
+};
+
+struct RoutePolicy {
+    std::string prefixKey;
+    std::string cluster;
+    ReadCommandPolicy read;
+};
+
+struct RoutePolicyConf {
+    std::vector<RoutePolicy> routes;
+};
+
+
 
 class Conf
 {
@@ -173,9 +190,12 @@ public:
     {
         return mServerPoolType;
     }
-    const ClusterServerPoolConf& clusterServerPool() const
-    {
-        return mClusterServerPool;
+    // const ClusterServerPoolConf& clusterServerPool() const
+    // {
+    //     return mClusterServerPool;
+    // }
+    const std::vector<ClusterServerPoolConf>& clusterServerPools() const {
+        return mClusterPools;
     }
     const StandaloneServerPoolConf& standaloneServerPool() const
     {
@@ -193,13 +213,17 @@ public:
     {
         return mLatencyMonitors;
     }
+    const RoutePolicyConf& routes() const {
+        return mRoutes;
+    }
 public:
     static bool parseMemory(long& m, const char* str);
     static bool parseDuration(long& v, const char* str);
 private:
     void setGlobal(const ConfParser::Node* node);
     void setAuthority(const ConfParser::Node* node);
-    void setClusterServerPool(const ConfParser::Node* node);
+    void setClusterServerPools(const ConfParser::Node* node);
+    void setClusterServerPool(ClusterServerPoolConf &cluster, const ConfParser::Node* node);
     void setStandaloneServerPool(const ConfParser::Node* node);
     void setDataCenter(const ConfParser::Node* node);
     void check();
@@ -216,6 +240,7 @@ private:
     void setLatencyMonitor(LatencyMonitorConf& m, const ConfParser::Node* n);
     void setCustomCommand(const ConfParser::Node* n);
     bool setCommandMode(int& mode, const char* name, const ConfParser::Node* n, const int defaultMode = Command::Write);
+    void setRoutePolicy(const ConfParser::Node* node);
 private:
     std::string mName;
     std::string mBind;
@@ -230,10 +255,12 @@ private:
     int mLogSample[LogLevel::Sentinel];
     std::vector<AuthConf> mAuthConfs;
     int mServerPoolType;
-    ClusterServerPoolConf mClusterServerPool;
+    // ClusterServerPoolConf mClusterServerPool;
+    std::vector<ClusterServerPoolConf> mClusterPools;
     StandaloneServerPoolConf mStandaloneServerPool;
     std::vector<DCConf> mDCConfs;
     std::string mLocalDC;
+    RoutePolicyConf mRoutes;
     std::vector<LatencyMonitorConf> mLatencyMonitors;
     std::vector<CustomCommandConf> mCustomCommands;
 };

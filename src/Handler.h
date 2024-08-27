@@ -81,7 +81,7 @@ public:
         return rand_r(&mRandSeed);
     }
 private:
-    bool preHandleRequest(Request* req, const String& key);
+    bool preHandleRequest(Request* req, const String& key, ServerPool *pool);
     void postHandleRequest(Request* req, ConnectConnection* s);
     void addPostEvent(AcceptConnection* c, int evts);
     void addPostEvent(ConnectConnection* c, int evts);
@@ -98,7 +98,7 @@ private:
     int checkClientTimeout(long timeout);
     int checkServerTimeout(long timeout);
     void innerResponse(ConnectConnection* c, Request* req, Response* res);
-    void infoRequest(Request* req, const String& key);
+    void infoRequest(Request* req, const String& key, ServerPool* pool);
     void infoLatencyRequest(Request* req);
     void infoServerLatencyRequest(Request* req);
     void configRequest(Request* req, const String& key);

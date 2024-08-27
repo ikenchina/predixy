@@ -137,6 +137,10 @@ void ConnectConnection::readEvent(Handler* h)
     }
 }
 
+ServerPool* ConnectConnection::pool() const {
+    return mServ->pool();
+}
+
 void ConnectConnection::parse(Handler* h, Buffer* buf, int pos)
 {
     FuncCallTimer();

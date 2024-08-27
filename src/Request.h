@@ -162,6 +162,12 @@ public:
     {
         return mCreateTime;
     }
+    void setServerPool(ServerPool* pool) {
+        mServerPool = pool;
+    }
+    ServerPool* serverPool() const {
+        return mServerPool;
+    }
 private:
     AcceptConnection* mConn;
     Command::Type mType;
@@ -177,7 +183,8 @@ private:
     int mFollowersDone;
     int mRedirectCnt;
     long mCreateTime; //steady time point us
-    void* mData; //user data for response
+    void* mData; //user data for 
+    ServerPool* mServerPool;
 };
 
 typedef List<Request, RequestListIndex::Recv> RecvRequestList;

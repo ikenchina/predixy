@@ -46,7 +46,6 @@ static void stopHandler(int sig)
 Proxy::Proxy():
     mListener(nullptr),
     mDataCenter(nullptr),
-    mServPool(nullptr),
     mStartTime(time(nullptr)),
     mStatsVer(0)
 {
@@ -57,7 +56,7 @@ Proxy::~Proxy()
     for (auto h : mHandlers) {
         delete h;
     }
-    delete mServPool;
+    mServPools.clear();
     delete mDataCenter;
     delete mListener;
     delete mConf;
@@ -113,16 +112,32 @@ bool Proxy::init(int argc, char* argv[])
     switch (mConf->serverPoolType()) {
     case ServerPool::Cluster:
         {
-            ClusterServerPool* p = new ClusterServerPool(this);
-            p->init(mConf->clusterServerPool());
-            mServPool = p;
+            for (auto &pool : mConf->clusterServerPools()) {
+                auto p = std::make_shared<ClusterServerPool>(this, pool.name);
+                p->init(pool);
+                mServPools.push_back(p);
+            }
+            for (auto &route : mConf->routes().routes) {
+                RouteCluster rCluster;
+                rCluster.prefixKey = route.prefixKey;
+                for (auto serv : mServPools) {
+                    auto dsrv = std::dynamic_pointer_cast<ClusterServerPool>(serv);
+                    if (dsrv->name() == route.cluster) {
+                        rCluster.cluster = serv;
+                    }
+                    if (dsrv->name() == route.read.cluster) {
+                        rCluster.read_cluster = serv;
+                    }
+                }
+                mRouteClusters.push_back(rCluster);
+            }
         }
         break;
     case ServerPool::Standalone:
         {
-            StandaloneServerPool* p = new StandaloneServerPool(this);
+            auto p = std::make_shared<StandaloneServerPool>(this);
             p->init(mConf->standaloneServerPool());
-            mServPool = p;
+            mServPools.push_back(p);
         }
         break;
     default:
@@ -175,3 +190,31 @@ int Proxy::run()
     return 0;
 }
 
+ServerPool* Proxy::serverPool(Request* req, const String& key) const
+{
+    auto c = req->connection();
+    if (c) {
+        // has already attached a server connection
+        if (auto s = c->connectConnection()) {
+            return s->server()->pool();
+        }
+    }
+    if (mServPools.size() == 0 ) {
+        return nullptr;
+    } 
+    if (mRouteClusters.size() == 0 || key.length() == 0) {
+        return mServPools[0].get();
+    }
+    for (auto &cc : mRouteClusters) {
+        if (cc.prefixKey == "*" || key.hasPrefix(cc.prefixKey)) {
+            if (req->requireWrite()) {
+                return cc.cluster.get();
+            }
+            if (cc.read_cluster) {
+                return cc.read_cluster.get();
+            }
+            return cc.cluster.get();
+        }
+    }
+    return mServPools[0].get();
+}

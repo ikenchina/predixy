@@ -12,9 +12,9 @@
 
 const char* ClusterServerPool::HashTag = "{}";
 
-ClusterServerPool::ClusterServerPool(Proxy* p):
+ClusterServerPool::ClusterServerPool(Proxy* p, const std::string& name):
     ServerPoolTmpl(p, Cluster),
-    mHash(Hash::Crc16)
+    mHash(Hash::Crc16), mName(name)
 {
     mServPool.reserve(Const::MaxServNum);
     mGroupPool.reserve(Const::MaxServGroupNum);
@@ -83,6 +83,7 @@ void ClusterServerPool::refreshRequest(Handler* h)
 {
     logDebug("h %d update redis cluster pool", h->id());
     RequestPtr req = RequestAlloc::create(Request::ClusterNodes);
+    req->setServerPool(this);
     h->handleRequest(req);
 }
 
