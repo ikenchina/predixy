@@ -206,7 +206,7 @@ ServerPool* Proxy::serverPool(Request* req, const String& key) const
         return mServPools[0].get();
     }
     for (auto &cc : mRouteClusters) {
-        if (cc.prefixKey == "*" || key.hasPrefix(cc.prefixKey)) {
+        if (cc.prefixKey.length() == 0 || key.hasPrefix(cc.prefixKey)) {
             if (req->requireWrite()) {
                 return cc.cluster.get();
             }
