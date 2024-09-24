@@ -62,7 +62,7 @@ void Handler::run()
         }
         refreshServerPool();
         checkConnectionPool();
-        timeout = mProxy->serverPool()->serverTimeout();
+        timeout = mProxy->serverPools()[0]->serverTimeout();
         if (timeout > 0) {
             int num = checkServerTimeout(timeout);
             if (num > 0) {
@@ -81,15 +81,18 @@ void Handler::stop()
     mStop = true;
 }
 
+// @TODO it is called by each handler
 void Handler::refreshServerPool()
 {
     FuncCallTimer();
     try {
-        ServerPool* sp = mProxy->serverPool();
-        if (!sp->refresh()) {
-            return;
+        auto sps = mProxy->serverPools();
+        for (auto sp : sps) {
+            if (!sp->refresh()) {
+                continue;
+            }
+            sp->refreshRequest(this);
         }
-        sp->refreshRequest(this);
     } catch (ExceptionBase& excp) {
         logError("h %d refresh server pool exception:%s",
                 id(), excp.what());
@@ -454,7 +457,8 @@ ConnectConnection* Handler::getConnectConnection(Request* req, Server* serv)
         }
         logNotice("h %d create connection pool for server %s",
                 id(), serv->addr().data());
-        p = new ConnectConnectionPool(this, serv, serv->pool()->dbNum());
+        auto num = serv->pool()->dbNum();
+        p = new ConnectConnectionPool(this, serv, num);
         mConnPool[sid] = p;
     }
     p->stats().requests++;
@@ -516,10 +520,19 @@ void Handler::handleRequest(Request* req)
         directResponse(req, code);
         return;
     }
-    if (preHandleRequest(req, key)) {
+
+    auto sp = req->serverPool();
+    if (!sp)
+        sp = mProxy->serverPool(req, key);
+
+    if (!sp) {
+        directResponse(req, Response::NoServer);
         return;
     }
-    auto sp = mProxy->serverPool();
+
+    if (preHandleRequest(req, key, sp)) {
+        return;
+    }
     Server* serv = sp->getServer(this, req, key);
     if (!serv) {
         directResponse(req, Response::NoServer);
@@ -538,7 +551,7 @@ void Handler::handleRequest(Request* req)
     postHandleRequest(req, s);
 }
 
-bool Handler::preHandleRequest(Request* req, const String& key)
+bool Handler::preHandleRequest(Request* req, const String& key, ServerPool *pool)
 {
     FuncCallTimer();
     auto c = req->connection();
@@ -582,8 +595,15 @@ bool Handler::preHandleRequest(Request* req, const String& key)
     case Command::Select:
         {
             int db = -1;
-            if (key.toInt(db)) {
-                if (db >= 0 && db < mProxy->serverPool()->dbNum()) {
+            if (c && key.toInt(db)) {
+                ServerPool* sp = nullptr;
+                if (auto sc = c->connectConnection()) {
+                    sp = sc->server()->pool();
+                }
+                if (!sp) {
+                    sp = mProxy->serverPools()[0].get();
+                }
+                if (sp && db >= 0 && db < sp->dbNum()) {
                     c->setDb(db);
                     directResponse(req, Response::Ok);
                     return true;
@@ -602,7 +622,7 @@ bool Handler::preHandleRequest(Request* req, const String& key)
         directResponse(req, Response::Cmd);
         return true;
     case Command::Info:
-        infoRequest(req, key);
+        infoRequest(req, key, pool);
         return true;
     case Command::Config:
         configRequest(req, key);
@@ -610,7 +630,7 @@ bool Handler::preHandleRequest(Request* req, const String& key)
     case Command::Script:
         if (key.length() == 4 && strncasecmp(key.data(), "load", 4) == 0) {
             int cursor = 0;
-            auto sp = mProxy->serverPool();
+            auto sp = pool;
             Server* leaderServ = sp->iter(cursor);
             if (!leaderServ) {
                 directResponse(req, Response::NoServer);
@@ -648,7 +668,7 @@ bool Handler::preHandleRequest(Request* req, const String& key)
         break;
     case Command::Scan:
         {
-            auto sp = mProxy->serverPool();
+            auto sp = pool;
             unsigned long cursor = atol(key.data());
             int groupIdx = cursor & Const::ServGroupMask;
             auto g = sp->getGroup(groupIdx);
@@ -771,26 +791,26 @@ void Handler::directResponse(Request* req, Response::GenericCode code, ConnectCo
     }
 }
 
-void Handler::handleResponse(ConnectConnection* s, Request* req, Response* res)
+void Handler::handleResponse(ConnectConnection* sc, Request* req, Response* res)
 {
     FuncCallTimer();
     SegmentStr<Const::MaxKeyLen> key(req->key());
     logDebug("h %d s %s %d req %ld %s %.*s res %ld %s",
-            id(), (s ? s->peer() : "None"), (s ? s->fd() : -1),
+            id(), (sc ? sc->peer() : "None"), (sc ? sc->fd() : -1),
             req->id(), req->cmd(), key.length(), key.data(),
             res->id(), res->typeStr());
     mStats.responses++;
-    if (s) {
-        mConnPool[s->server()->id()]->stats().responses++;
-        if (s->isShared()) {
-            mConnPool[s->server()->id()]->decrPendRequests();
+    if (sc) {
+        mConnPool[sc->server()->id()]->stats().responses++;
+        if (sc->isShared()) {
+            mConnPool[sc->server()->id()]->decrPendRequests();
         }
     }
     if (req->isInner()) {
-        innerResponse(s, req, res);
+        innerResponse(sc, req, res);
         return;
     }
-    auto sp = mProxy->serverPool();
+    
     AcceptConnection* c = req->connection();
     if (!c) {
         logDebug("h %d ignore req %ld res %ld", id(), req->id(), res->id());
@@ -801,37 +821,42 @@ void Handler::handleResponse(ConnectConnection* s, Request* req, Response* res)
                 c->peer(), c->fd(), c->status(), c->statusStr());
         return;
     }
-    if (sp->type() == ServerPool::Cluster && res->type() == Reply::Error) {
-        if (res->isMoved()) {
-            if (redirect(s, req, res, true)) {
-                return;
+
+    if (sc) {
+        auto sp = sc->pool();
+        if (sp->type() == ServerPool::Cluster && res->type() == Reply::Error) {
+            if (res->isMoved()) {
+                if (redirect(sc, req, res, true)) {
+                    return;
+                }
+            } else if (res->isAsk()) {
+                if (redirect(sc, req, res, false)) {
+                    return;
+                }
             }
-        } else if (res->isAsk()) {
-            if (redirect(s, req, res, false)) {
-                return;
-            }
-        }
-    } else if (req->type() == Command::Scan && s && res->type() == Reply::Array) {
-        SegmentStr<64> str(res->body());
-        if (const char* p = strchr(str.data() + sizeof("*2\r\n$"), '\n')) {
-            long cursor = atol(p + 1);
-            auto g = s->server()->group();
-            if (cursor != 0 || (g = sp->getGroup(g->id() + 1)) != nullptr) {
-                cursor <<= Const::ServGroupBits;
-                cursor |= g->id();
-                if ((p = strchr(p, '*')) != nullptr) {
-                    char buf[32];
-                    int n = snprintf(buf, sizeof(buf), "%ld", cursor);
-                    res->head().fset(nullptr,
-                            "*2\r\n"
-                            "$%d\r\n"
-                            "%s\r\n",
-                            n, buf);
-                    res->body().cut(p - str.data());
+        } else if (req->type() == Command::Scan && sc && res->type() == Reply::Array) {
+            SegmentStr<64> str(res->body());
+            if (const char* p = strchr(str.data() + sizeof("*2\r\n$"), '\n')) {
+                long cursor = atol(p + 1);
+                auto g = sc->server()->group();
+                if (cursor != 0 || (g = sp->getGroup(g->id() + 1)) != nullptr) {
+                    cursor <<= Const::ServGroupBits;
+                    cursor |= g->id();
+                    if ((p = strchr(p, '*')) != nullptr) {
+                        char buf[32];
+                        int n = snprintf(buf, sizeof(buf), "%ld", cursor);
+                        res->head().fset(nullptr,
+                                "*2\r\n"
+                                "$%d\r\n"
+                                "%s\r\n",
+                                n, buf);
+                        res->body().cut(p - str.data());
+                    }
                 }
             }
         }
     }
+
     if (req->leader()) {
         res->adjustForLeader(req);
     }
@@ -840,7 +865,7 @@ void Handler::handleResponse(ConnectConnection* s, Request* req, Response* res)
         addPostEvent(c, Multiplexor::WriteEvent);
     }
     long elapsed = Util::elapsedUSec() - req->createTime();
-    if (auto cp = s ? mConnPool[s->server()->id()] : nullptr) {
+    if (auto cp = sc ? mConnPool[sc->server()->id()] : nullptr) {
         for (auto i : mProxy->latencyMonitorSet().cmdIndex(req->type())) {
             int idx = mLatencyMonitors[i].add(elapsed);
             if (idx >= 0) {
@@ -855,7 +880,7 @@ void Handler::handleResponse(ConnectConnection* s, Request* req, Response* res)
     logInfo("RESP h %d c %s %d req %ld %s %.*s s %s %d res %ld %s t %ld",
             id(), c->peer(), c->fd(),
             req->id(), req->cmd(), key.length(), key.data(),
-            (s ? s->peer() : "None"), (s ? s->fd() : -1),
+            (sc ? sc->peer() : "None"), (sc ? sc->fd() : -1),
             res->id(), res->typeStr(), elapsed);
     switch (req->type()) {
     case Command::Blpop:
@@ -888,7 +913,7 @@ void Handler::handleResponse(ConnectConnection* s, Request* req, Response* res)
     case Command::Exec:
     case Command::Discard:
         if (c->inMulti()) {
-            if (s) {
+            if (sc) {
                 c->unwatch();
                 c->decrMulti();
             } else {
@@ -899,23 +924,23 @@ void Handler::handleResponse(ConnectConnection* s, Request* req, Response* res)
         break;
     case Command::Psubscribe:
     case Command::Subscribe:
-        if (!s) {
+        if (!sc) {
             c->decrPendSub();
         }
         break;
     default:
         break;
     }
-    if (s && !s->isShared() && res->code() != Response::ServerConnectionClose) {
+    if (sc && !sc->isShared() && res->code() != Response::ServerConnectionClose) {
         if (!c->inTransaction() && !c->inSub(true)) {
-            mConnPool[s->server()->id()]->putPrivateConnection(s);
+            mConnPool[sc->server()->id()]->putPrivateConnection(sc);
             c->detachConnectConnection();
-            s->detachAcceptConnection();
+            sc->detachAcceptConnection();
         }
     }
 }
 
-void Handler::infoRequest(Request* req, const String& key)
+void Handler::infoRequest(Request* req, const String& key, ServerPool* pool)
 {
     if (key.equal("ResetStats", true)) {
         mProxy->incrStatsVer();
@@ -993,7 +1018,7 @@ void Handler::infoRequest(Request* req, const String& key)
 
     if (Scope(all, empty, "Servers")) {
         int servCursor = 0;
-        auto sp = mProxy->serverPool();
+        auto sp = pool;
         while (Server* serv = sp->iter(servCursor)) {
             ServerStats st;
             for (auto h : mProxy->handlers()) {
@@ -1076,20 +1101,24 @@ void Handler::infoLatencyRequest(Request* req)
     buf = buf->fappend("\n");
 
     buf = buf->fappend("# ServerLatencyMonitor\n");
-    auto sp = mProxy->serverPool();
-    int servCursor = 0;
-    while (Server* serv = sp->iter(servCursor)) {
-        lm = mLatencyMonitors[i];
-        lm.reset();
-        for (auto h : mProxy->handlers()) {
-            if (auto cp = h->getConnectConnectionPool(serv->id())) {
-                lm += cp->latencyMonitors()[i];
+
+
+    for (auto pool : mProxy->serverPools()) {
+        auto sp = pool;
+        int servCursor = 0;
+        while (Server* serv = sp->iter(servCursor)) {
+            lm = mLatencyMonitors[i];
+            lm.reset();
+            for (auto h : mProxy->handlers()) {
+                if (auto cp = h->getConnectConnectionPool(serv->id())) {
+                    lm += cp->latencyMonitors()[i];
+                }
             }
+            buf = buf->fappend("ServerLatencyMonitorName:%s %s\n",
+                            serv->addr().data(), lm.name().data());
+            buf = lm.output(buf);
+            buf = buf->fappend("\n");
         }
-        buf = buf->fappend("ServerLatencyMonitorName:%s %s\n",
-                        serv->addr().data(), lm.name().data());
-        buf = lm.output(buf);
-        buf = buf->fappend("\n");
     }
 
     buf = buf->fappend("\r\n");
@@ -1115,8 +1144,14 @@ void Handler::infoServerLatencyRequest(Request* req)
     String addr(p, len);
     ResponsePtr res = ResponseAlloc::create();
     Segment& body = res->body();
-    auto sp = mProxy->serverPool();
-    Server* serv = sp->getServer(addr);
+    SegmentStr<Const::MaxKeyLen> key(req->key());
+
+    Server* serv = nullptr;
+    for (auto pool : mProxy->serverPools()) {
+        serv = pool->getServer(addr);
+        if (serv) 
+            break;
+    }
     if (!serv) {
         res->setType(Reply::Error);
         body.fset(nullptr, "-ERR server \"%.*s\" no exists\r\n",
@@ -1357,67 +1392,68 @@ void Handler::configSetRequest(Request* req)
     }
 }
 
-void Handler::innerResponse(ConnectConnection* s, Request* req, Response* res)
+void Handler::innerResponse(ConnectConnection* sc, Request* req, Response* res)
 {
     logDebug("h %d s %s %d inner req %ld %s res %ld %s",
-            id(), (s ? s->peer() : "None"), (s ? s->fd() : -1),
+            id(), (sc ? sc->peer() : "None"), (sc ? sc->fd() : -1),
             req->id(), req->cmd(),
             res->id(), res->typeStr());
     switch (req->type()) {
     case Command::PingServ:
-        if (s && res->isPong()) {
-            Server* serv = s->server();
+        if (sc && res->isPong()) {
+            Server* serv = sc->server();
             if (serv->fail()) {
                 serv->setFail(false);
                 logNotice("h %d s %s %d mark server alive",
-                        id(), s->peer(), s->fd());
+                        id(), sc->peer(), sc->fd());
             }
         }
         break;
     case Command::AuthServ:
-        if (!res->isOk()) {
-            s->setStatus(ConnectConnection::LogicError);
-            addPostEvent(s, Multiplexor::ErrorEvent);
+        if (sc && !res->isOk()) {
+            sc->setStatus(ConnectConnection::LogicError);
+            addPostEvent(sc, Multiplexor::ErrorEvent);
             logWarn("h %d s %s %d auth fail",
-                    id(), s->peer(), s->fd());
+                    id(), sc->peer(), sc->fd());
         }
         break;
     case Command::Readonly:
-        if (!res->isOk()) {
-            s->setStatus(ConnectConnection::LogicError);
-            addPostEvent(s, Multiplexor::ErrorEvent);
+        if (sc && !res->isOk()) {
+            sc->setStatus(ConnectConnection::LogicError);
+            addPostEvent(sc, Multiplexor::ErrorEvent);
             logWarn("h %d s %s %d readonly fail",
-                    id(), s->peer(), s->fd());
+                    id(), sc->peer(), sc->fd());
         }
         break;
     case Command::SelectServ:
-        if (!res->isOk()) {
-            s->setStatus(ConnectConnection::LogicError);
-            addPostEvent(s, Multiplexor::ErrorEvent);
+        if (sc && !res->isOk()) {
+            sc->setStatus(ConnectConnection::LogicError);
+            addPostEvent(sc, Multiplexor::ErrorEvent);
             logWarn("h %d s %s %d db select %d fail",
-                    id(), s->peer(), s->fd(), s->db());
+                    id(), sc->peer(), sc->fd(), sc->db());
         }
         break;
     case Command::ClusterNodes:
     case Command::SentinelSentinels:
     case Command::SentinelGetMaster:
     case Command::SentinelSlaves:
-        mProxy->serverPool()->handleResponse(this, s, req, res);
+        if (sc)
+            sc->pool()->handleResponse(this, sc, req, res);
         break;
     case Command::UnwatchServ:
-        if (!res->isOk()) {
-            s->setStatus(ConnectConnection::LogicError);
-            addPostEvent(s, Multiplexor::ErrorEvent);
+        if (sc && !res->isOk()) {
+            sc->setStatus(ConnectConnection::LogicError);
+            addPostEvent(sc, Multiplexor::ErrorEvent);
             logWarn("h %d s %s %d unwatch fail",
-                    id(), s->peer(), s->fd(), s->db());
+                    id(), sc->peer(), sc->fd(), sc->db());
         }
         break;
     case Command::DiscardServ:
-        if (!res->isOk()) {
-            s->setStatus(ConnectConnection::LogicError);
-            addPostEvent(s, Multiplexor::ErrorEvent);
+        if (sc && !res->isOk()) {
+            sc->setStatus(ConnectConnection::LogicError);
+            addPostEvent(sc, Multiplexor::ErrorEvent);
             logWarn("h %d s %s %d discard fail",
-                    id(), s->peer(), s->fd(), s->db());
+                    id(), sc->peer(), sc->fd(), sc->db());
         }
         break;
     default:
@@ -1442,7 +1478,8 @@ bool Handler::redirect(ConnectConnection* c, Request* req, Response* res, bool m
             return false;
         }
     }
-    auto p = static_cast<ClusterServerPool*>(mProxy->serverPool());
+ 
+    auto p = static_cast<ClusterServerPool*>(c->pool());
     Server* serv = p->redirect(addr, c->server());
     if (!serv) {
         logDebug("h %d req %ld %s redirect to %s can't get server",
@@ -1454,6 +1491,7 @@ bool Handler::redirect(ConnectConnection* c, Request* req, Response* res, bool m
     if (!s) {
         return false;
     }
+    
     logDebug("h %d %s redirect req %ld from %s %d to %s",
               id(), (moveOrAsk ? "MOVE" : "ASK"),
               req->id(), c->peer(), c->fd(), addr.data());

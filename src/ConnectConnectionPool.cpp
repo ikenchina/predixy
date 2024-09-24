@@ -122,7 +122,7 @@ bool ConnectConnectionPool::init(ConnectConnection* c)
         logWarn("h %d s %s %d settcpnodelay fail %s",
                 mHandler->id(), c->peer(), c->fd(), StrError());
     }
-    auto sp = mHandler->proxy()->serverPool();
+    auto sp = c->pool();
     if (sp->keepalive() > 0 && !c->setTcpKeepAlive(sp->keepalive())) {
         logWarn("h %d s %s %d settcpkeepalive(%d) fail %s",
                 mHandler->id(), c->peer(), c->fd(), sp->keepalive(),StrError());

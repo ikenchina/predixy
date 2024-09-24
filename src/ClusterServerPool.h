@@ -17,13 +17,16 @@ class ClusterServerPool : public ServerPoolTmpl<ClusterServerPool>
 public:
     static const char* HashTag;
 public:
-    ClusterServerPool(Proxy* p);
+    ClusterServerPool(Proxy* p, const std::string& name);
     ~ClusterServerPool();
     void init(const ClusterServerPoolConf& conf);
     Server* redirect(const String& addr, Server* old) const;
     const std::vector<Server*>& servers() const
     {
         return mServPool;
+    }
+    const std::string& name() const {
+        return mName;
     }
 private:
     Server* getServer(Handler* h, Request* req, const String& key) const;
@@ -40,6 +43,7 @@ private:
     }
     friend class ServerPoolTmpl<ClusterServerPool>;
 private:
+    std::string mName;
     Hash mHash;
     std::vector<Server*> mServPool;
     std::map<String, ServerGroup*> mGroups;
