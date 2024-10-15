@@ -25,7 +25,7 @@ DataCenter::~DataCenter()
 {
 }
 
-void DataCenter::init(const Conf* conf)
+void DataCenter::init(std::shared_ptr<Conf>& conf)
 {
     for (auto& c : conf->dcConfs()) {
         if (mDCs.find(c.name) != mDCs.end()) {

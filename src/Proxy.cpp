@@ -57,9 +57,13 @@ Proxy::~Proxy()
         delete h;
     }
     mServPools.clear();
+
+    if (mAuxiliary != nullptr) {
+        delete mAuxiliary;
+    }
+
     delete mDataCenter;
     delete mListener;
-    delete mConf;
 }
 
 bool Proxy::init(int argc, char* argv[])
@@ -75,8 +79,15 @@ bool Proxy::init(int argc, char* argv[])
     signal(SIGINT, stopHandler);
     signal(SIGTERM, stopHandler);
 
+    for (int i = 0; i < argc; i++) {
+        mArgs.push_back(argv[i]);
+    }
+
+    mRouteClusters = std::make_shared<std::vector<RouteCluster>>();
+    mConf = std::make_shared<Conf>();
+
     Command::init();
-    mConf = new Conf();
+    
     if (!mConf->init(argc, argv)) {
         return false;
     }
@@ -109,6 +120,7 @@ bool Proxy::init(int argc, char* argv[])
     s->listen();
     mListener = s;
     logNotice("predixy listen in %s", mConf->bind());
+
     switch (mConf->serverPoolType()) {
     case ServerPool::Cluster:
         {
@@ -117,20 +129,7 @@ bool Proxy::init(int argc, char* argv[])
                 p->init(pool);
                 mServPools.push_back(p);
             }
-            for (auto &route : mConf->routes().routes) {
-                RouteCluster rCluster;
-                rCluster.prefixKey = route.prefixKey;
-                for (auto serv : mServPools) {
-                    auto dsrv = std::dynamic_pointer_cast<ClusterServerPool>(serv);
-                    if (dsrv->name() == route.cluster) {
-                        rCluster.cluster = serv;
-                    }
-                    if (dsrv->name() == route.read.cluster) {
-                        rCluster.read_cluster = serv;
-                    }
-                }
-                mRouteClusters.push_back(rCluster);
-            }
+            initRoutes(mConf, mRouteClusters.get());
         }
         break;
     case ServerPool::Standalone:
@@ -144,12 +143,37 @@ bool Proxy::init(int argc, char* argv[])
         Throw(InitFail, "unknown server pool type");
         break;
     }
+    
+    // start handlers
     for (int i = 0; i < mConf->workerThreads(); ++i) {
         Handler* h = new Handler(this);
         mHandlers.push_back(h);
     }
     return true;
 }
+
+
+
+void Proxy::initRoutes(std::shared_ptr<Conf>& conf, std::vector<RouteCluster>* routeClusters) {
+    if (conf->serverPoolType() == ServerPool::Cluster) {
+        for (auto& route : conf->routes().routes) {
+            RouteCluster rCluster;
+            rCluster.prefixKey = route.prefixKey;
+            for (auto serv : mServPools) {
+                auto dsrv = std::dynamic_pointer_cast<ClusterServerPool>(serv);
+                if (dsrv->name() == route.cluster) {
+                    rCluster.cluster = serv;
+                }
+                if (dsrv->name() == route.read.cluster) {
+                    rCluster.read_cluster = serv;
+                }
+            }
+            routeClusters->push_back(rCluster);
+        }
+    }
+}
+
+
 
 int Proxy::run()
 {
@@ -161,6 +185,23 @@ int Proxy::run()
         std::shared_ptr<std::thread> t(new std::thread([=](){h->run();}));
         tasks.push_back(t);
     }
+
+    if (mConf->serverPoolType() == ServerPool::Cluster) {
+        mAuxiliary = new std::thread([=]() {
+            while (!Abort && !Stop) {
+                sleep(1);
+                std::shared_ptr<Conf> conf;
+                {
+                    std::lock_guard<std::mutex> lg(mConfGuard);
+                    conf = mConf;
+                }
+                if (conf->updated()) {
+                    this->updateConfig();
+                }
+            }
+        });
+    }
+
     Running = true;
     bool stop = false;
     while (!stop) {
@@ -182,6 +223,10 @@ int Proxy::run()
     for (auto t : tasks) {
         t->join();
     }
+    if (mAuxiliary != nullptr) {
+        mAuxiliary->join();
+    }
+
     Logger::gInst->stop();
     TimerPoint::report();
     if (*mConf->bind() == '/') {
@@ -190,7 +235,7 @@ int Proxy::run()
     return 0;
 }
 
-ServerPool* Proxy::serverPool(Request* req, const String& key) const
+ServerPool* Proxy::serverPool(Request* req, const String& key) 
 {
     auto c = req->connection();
     if (c) {
@@ -199,13 +244,20 @@ ServerPool* Proxy::serverPool(Request* req, const String& key) const
             return s->server()->pool();
         }
     }
+
+    std::shared_ptr<std::vector<RouteCluster>> routeClusters;
+    {
+        std::lock_guard<std::mutex> lg(mRouteClustersGuard);
+        routeClusters = mRouteClusters;
+    }
+
     if (mServPools.size() == 0 ) {
         return nullptr;
     } 
-    if (mRouteClusters.size() == 0 || key.length() == 0) {
+    if (mServPools.size() == 0 || key.length() == 0) {
         return mServPools[0].get();
     }
-    for (auto &cc : mRouteClusters) {
+    for (auto& cc : (*routeClusters)) {
         if (cc.prefixKey.length() == 0 || key.hasPrefix(cc.prefixKey)) {
             if (req->requireWrite()) {
                 return cc.cluster.get();
@@ -217,4 +269,22 @@ ServerPool* Proxy::serverPool(Request* req, const String& key) const
         }
     }
     return mServPools[0].get();
+}
+
+void Proxy::updateConfig() {
+    logNotice("update config begin");
+
+    std::shared_ptr<Conf> newConf = std::make_shared<Conf>();
+    newConf->init(mArgs.size(), mArgs.data());
+
+    auto routeClusters = std::make_shared<std::vector<RouteCluster>>();
+
+    initRoutes(newConf, routeClusters.get());
+
+    // don't update mConf
+    {   // just updating routes
+        std::lock_guard<std::mutex> lg(mRouteClustersGuard);
+        mRouteClusters = routeClusters;
+    }
+    logNotice("update config end");
 }

@@ -8,6 +8,8 @@
 #define _PREDIXY_PROXY_H_
 
 #include <vector>
+#include <memory>
+#include <mutex>
 #include "Predixy.h"
 #include "Handler.h"
 #include "DC.h"
@@ -29,8 +31,9 @@ public:
     {
         return mStartTime;
     }
-    Conf* conf() const
+    std::shared_ptr<Conf> conf() 
     {
+        std::lock_guard<std::mutex> g(mConfGuard);
         return mConf;
     }
     ListenSocket* listener() const
@@ -45,10 +48,14 @@ public:
     {
         return mDataCenter;
     }
-    const std::vector<std::shared_ptr<ServerPool>>& serverPools() const {
+    const std::vector<std::shared_ptr<ServerPool>>& serverPools()  {
         return mServPools;
     }
-    ServerPool* serverPool(Request* req, const String& key) const;
+    const std::shared_ptr<ServerPool> serverPool(size_t i)  {
+        return mServPools[i];
+    }
+
+    ServerPool* serverPool(Request* req, const String& key);
     bool isSplitMultiKey() const
     {
         return mConf->standaloneServerPool().groups.size() != 1;
@@ -85,15 +92,25 @@ private:
         std::shared_ptr<ServerPool> cluster;
         std::shared_ptr<ServerPool> read_cluster;
     };
+    void updateConfig();
+    void initRoutes(std::shared_ptr<Conf>& conf, std::vector<RouteCluster> *routeClusters);
 private:
-    Conf* mConf;
+    std::mutex mConfGuard;
+    std::shared_ptr<Conf> mConf;
+    std::vector<char*> mArgs;
+
     ListenSocket* mListener;
     Authority mAuthority;
     DataCenter* mDataCenter;
     std::vector<Handler*> mHandlers;
-    //ServerPool* mServPool;
+
+    std::thread *mAuxiliary = nullptr;
+
     std::vector<std::shared_ptr<ServerPool>> mServPools;
-    std::vector<RouteCluster> mRouteClusters;
+
+    std::mutex mRouteClustersGuard;
+    std::shared_ptr<std::vector<RouteCluster>> mRouteClusters;
+
     time_t mStartTime;
     AtomicLong mStatsVer;
     LatencyMonitorSet mLatencyMonitorSet;

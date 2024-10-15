@@ -8,6 +8,7 @@
 #define _PREDIXY_DC_H_
 
 #include <vector>
+#include <memory>
 #include <map>
 #include "ID.h"
 #include "Conf.h"
@@ -57,7 +58,7 @@ public:
 public:
     DataCenter();
     ~DataCenter();
-    void init(const Conf* conf);
+    void init(std::shared_ptr<Conf>& conf);
     DC* getDC(const String& addr) const;
     DC* localDC() const
     {
