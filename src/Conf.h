@@ -190,10 +190,7 @@ public:
     {
         return mServerPoolType;
     }
-    // const ClusterServerPoolConf& clusterServerPool() const
-    // {
-    //     return mClusterServerPool;
-    // }
+
     const std::vector<ClusterServerPoolConf>& clusterServerPools() const {
         return mClusterPools;
     }
@@ -216,6 +213,8 @@ public:
     const RoutePolicyConf& routes() const {
         return mRoutes;
     }
+    
+    bool updated();
 public:
     static bool parseMemory(long& m, const char* str);
     static bool parseDuration(long& v, const char* str);
@@ -263,6 +262,7 @@ private:
     RoutePolicyConf mRoutes;
     std::vector<LatencyMonitorConf> mLatencyMonitors;
     std::vector<CustomCommandConf> mCustomCommands;
+    std::vector<std::pair<std::string, std::time_t>> mConfFiles;
 };
 
 

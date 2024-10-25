@@ -8,11 +8,22 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <utility>
+#include <sys/stat.h>
 #include "LogFileSink.h"
 #include "ServerPool.h"
 #include "Conf.h"
 
 using std::string;
+
+std::time_t fileModTime(const std::string& fn) {
+    struct stat fileInfo;
+    if (stat(fn.c_str(), &fileInfo) == 0) {
+        return fileInfo.st_mtime;
+    } 
+    return -1;
+}
+
 
 // [password@]addr role
 bool ServerConf::parse(ServerConf& s, const char* str)
@@ -103,6 +114,12 @@ bool Conf::init(int argc, char* argv[])
     ConfParser p;
     ConfParser::Node* n = p.load(argv[1]);
     setGlobal(n);
+
+    for (auto f : p.files()) {
+        auto tm = fileModTime(*f);
+        mConfFiles.emplace_back(*f, tm);
+    }
+
     for (int i = 2; i < argc; ++i) {
         if (char* v = GetVal(argv[i], "--Name=")) {
             mName = v;
@@ -802,3 +819,15 @@ bool Conf::setServers(std::vector<ServerConf>& servs, const char* name, const Co
     }
     return true;
 }
+
+bool Conf::updated() {
+    for (auto& pair : mConfFiles) {
+        auto tm = fileModTime(pair.first);
+        if (tm != -1 && tm > pair.second) {
+            pair.second = tm;
+            return true;
+        }
+    }
+    return false;
+}
+

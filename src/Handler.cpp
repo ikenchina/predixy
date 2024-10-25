@@ -36,7 +36,7 @@ Handler::Handler(Proxy* p):
                  id(), StrError());
     }
     mConnPool.reserve(Const::MaxServNum);
-    Conf* conf = p->conf();
+    auto conf = p->conf();
     mIDUnique.resize(conf->dcConfs().size());
 }
 
@@ -62,7 +62,7 @@ void Handler::run()
         }
         refreshServerPool();
         checkConnectionPool();
-        timeout = mProxy->serverPools()[0]->serverTimeout();
+        timeout = mProxy->serverPool(0)->serverTimeout();
         if (timeout > 0) {
             int num = checkServerTimeout(timeout);
             if (num > 0) {
@@ -86,7 +86,7 @@ void Handler::refreshServerPool()
 {
     FuncCallTimer();
     try {
-        auto sps = mProxy->serverPools();
+        auto &sps = mProxy->serverPools();
         for (auto sp : sps) {
             if (!sp->refresh()) {
                 continue;
@@ -601,7 +601,7 @@ bool Handler::preHandleRequest(Request* req, const String& key, ServerPool *pool
                     sp = sc->server()->pool();
                 }
                 if (!sp) {
-                    sp = mProxy->serverPools()[0].get();
+                    sp = mProxy->serverPool(0).get();
                 }
                 if (sp && db >= 0 && db < sp->dbNum()) {
                     c->setDb(db);
@@ -964,17 +964,18 @@ void Handler::infoRequest(Request* req, const String& key, ServerPool* pool)
         (buf = buf->fappend("# %s\n", header)) : nullptr)
 
     if (all || empty || key.equal("Proxy", true) || key.equal("Server", true)) {
+        auto conf = mProxy->conf();
         buf = buf->fappend("# %s\n", "Proxy");
         buf = buf->fappend("Version:%s\n", _PREDIXY_VERSION_);
-        buf = buf->fappend("Name:%s\n", mProxy->conf()->name());
-        buf = buf->fappend("Bind:%s\n", mProxy->conf()->bind());
+        buf = buf->fappend("Name:%s\n", conf->name());
+        buf = buf->fappend("Bind:%s\n", conf->bind());
         buf = buf->fappend("RedisMode:proxy\n");
 #ifdef _PREDIXY_SINGLE_THREAD_
         buf = buf->fappend("SingleThread:true\n");
 #else
         buf = buf->fappend("SingleThread:false\n");
 #endif
-        buf = buf->fappend("WorkerThreads:%d\n", mProxy->conf()->workerThreads());
+        buf = buf->fappend("WorkerThreads:%d\n", conf->workerThreads());
         buf = buf->fappend("Uptime:%ld\n", (long)mProxy->startTime());
         SString<32> timeStr;
         timeStr.strftime("%Y-%m-%d %H:%M:%S", mProxy->startTime());
@@ -1103,7 +1104,7 @@ void Handler::infoLatencyRequest(Request* req)
     buf = buf->fappend("# ServerLatencyMonitor\n");
 
 
-    for (auto pool : mProxy->serverPools()) {
+    for (auto& pool : mProxy->serverPools()) {
         auto sp = pool;
         int servCursor = 0;
         while (Server* serv = sp->iter(servCursor)) {
@@ -1147,7 +1148,7 @@ void Handler::infoServerLatencyRequest(Request* req)
     SegmentStr<Const::MaxKeyLen> key(req->key());
 
     Server* serv = nullptr;
-    for (auto pool : mProxy->serverPools()) {
+    for (auto& pool : mProxy->serverPools()) {
         serv = pool->getServer(addr);
         if (serv) 
             break;

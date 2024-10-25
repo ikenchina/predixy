@@ -74,6 +74,9 @@ public:
     ~ConfParser();
     void clear();
     Node* load(const char* file);
+    const std::vector<std::string*> files() const {
+        return mStrings;
+    }
 private:
     static std::string* getFile(const std::string& name, const char* parent);
     Status parse(std::string& line, std::string& key, std::string& val);
